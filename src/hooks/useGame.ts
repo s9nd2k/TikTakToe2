@@ -4,17 +4,23 @@ import { audioService } from '../utils/audio';
 export type CellValue = 'X' | 'O' | null;
 export type GameStatus = 'playing' | 'won' | 'lost' | 'draw';
 
+export interface WinInfo {
+  winner: 'X' | 'O';
+  line: number[];
+}
+
 interface GameState {
   board: CellValue[];
   boardSize: number;
+  winLength: number;
   currentPlayer: 'X' | 'O';
   status: GameStatus;
-  winLine: number[] | null;
+  winInfo: WinInfo | null;
   moveCount: number;
 }
 
 // Universal win check for N×N board with K in a row
-function checkWin(board: CellValue[], boardSize: number, k: number = 3): { winner: CellValue; line: number[] } | null {
+function checkWin(board: CellValue[], boardSize: number, k: number): WinInfo | null {
   const directions = [
     [0, 1],   // horizontal
     [1, 0],   // vertical
@@ -58,8 +64,26 @@ function checkWin(board: CellValue[], boardSize: number, k: number = 3): { winne
   return null;
 }
 
-// Simple AI for computer opponent (minimax for small boards, heuristic for larger)
-function getAIMove(board: CellValue[], boardSize: number, aiSymbol: 'X' | 'O'): number {
+// Determine win length based on board size
+export function getWinLength(boardSize: number): number {
+  switch (boardSize) {
+    case 3: return 3;
+    case 4: return 4;
+    case 5: return 4;
+    case 6: return 4;
+    case 7: return 5;
+    default: return 3;
+  }
+}
+
+// Get rules description
+export function getRulesDescription(boardSize: number): string {
+  const winLen = getWinLength(boardSize);
+  return `${winLen} в ряд для победы`;
+}
+
+// Simple AI for computer opponent
+function getAIMove(board: CellValue[], boardSize: number, aiSymbol: 'X' | 'O', winLength: number): number {
   const emptyCells = board.map((cell, idx) => cell === null ? idx : -1).filter(idx => idx !== -1);
   if (emptyCells.length === 0) return -1;
 
@@ -69,14 +93,14 @@ function getAIMove(board: CellValue[], boardSize: number, aiSymbol: 'X' | 'O'): 
   for (const idx of emptyCells) {
     const testBoard = [...board];
     testBoard[idx] = aiSymbol;
-    if (checkWin(testBoard, boardSize)) return idx;
+    if (checkWin(testBoard, boardSize, winLength)) return idx;
   }
 
   // Check if human can win (block)
   for (const idx of emptyCells) {
     const testBoard = [...board];
     testBoard[idx] = humanSymbol;
-    if (checkWin(testBoard, boardSize)) return idx;
+    if (checkWin(testBoard, boardSize, winLength)) return idx;
   }
 
   // For small boards, use center strategy
@@ -107,12 +131,15 @@ function getAIMove(board: CellValue[], boardSize: number, aiSymbol: 'X' | 'O'): 
 }
 
 export function useGame(boardSize: number = 3, playerSymbol: 'X' | 'O' = 'X', vsComputer: boolean = true) {
+  const winLength = getWinLength(boardSize);
+
   const [gameState, setGameState] = useState<GameState>({
     board: Array(boardSize * boardSize).fill(null),
     boardSize,
+    winLength,
     currentPlayer: 'X',
     status: 'playing',
-    winLine: null,
+    winInfo: null,
     moveCount: 0,
   });
 
@@ -122,12 +149,14 @@ export function useGame(boardSize: number = 3, playerSymbol: 'X' | 'O' = 'X', vs
   const startTimeRef = useRef<number>(0);
 
   useEffect(() => {
+    const wl = getWinLength(boardSize);
     setGameState({
       board: Array(boardSize * boardSize).fill(null),
       boardSize,
+      winLength: wl,
       currentPlayer: 'X',
       status: 'playing',
-      winLine: null,
+      winInfo: null,
       moveCount: 0,
     });
     setTimer(0);
@@ -169,7 +198,7 @@ export function useGame(boardSize: number = 3, playerSymbol: 'X' | 'O' = 'X', vs
       audioService.playMove(prev.currentPlayer);
 
       // Check win
-      const winResult = checkWin(newBoard, prev.boardSize);
+      const winResult = checkWin(newBoard, prev.boardSize, prev.winLength);
       if (winResult) {
         const isPlayerWin = winResult.winner === playerSymbol;
         setIsRunning(false);
@@ -182,7 +211,7 @@ export function useGame(boardSize: number = 3, playerSymbol: 'X' | 'O' = 'X', vs
           ...prev,
           board: newBoard,
           status: isPlayerWin ? 'won' : 'lost',
-          winLine: winResult.line,
+          winInfo: winResult,
           moveCount: newMoveCount,
         };
       }
@@ -206,14 +235,14 @@ export function useGame(boardSize: number = 3, playerSymbol: 'X' | 'O' = 'X', vs
         setTimeout(() => {
           setGameState(current => {
             if (current.status !== 'playing') return current;
-            const aiIdx = getAIMove(current.board, current.boardSize, nextPlayer);
+            const aiIdx = getAIMove(current.board, current.boardSize, nextPlayer, current.winLength);
             if (aiIdx === -1) return current;
 
             const aiBoard = [...current.board];
             aiBoard[aiIdx] = nextPlayer;
             audioService.playMove(nextPlayer);
 
-            const aiWinResult = checkWin(aiBoard, current.boardSize);
+            const aiWinResult = checkWin(aiBoard, current.boardSize, current.winLength);
             if (aiWinResult) {
               setIsRunning(false);
               setTimeout(() => audioService.playLose(), 100);
@@ -221,7 +250,7 @@ export function useGame(boardSize: number = 3, playerSymbol: 'X' | 'O' = 'X', vs
                 ...current,
                 board: aiBoard,
                 status: 'lost',
-                winLine: aiWinResult.line,
+                winInfo: aiWinResult,
                 moveCount: current.moveCount + 1,
               };
             }
@@ -257,12 +286,14 @@ export function useGame(boardSize: number = 3, playerSymbol: 'X' | 'O' = 'X', vs
   }, [boardSize, playerSymbol, vsComputer]);
 
   const resetGame = useCallback(() => {
+    const wl = getWinLength(boardSize);
     setGameState({
       board: Array(boardSize * boardSize).fill(null),
       boardSize,
+      winLength: wl,
       currentPlayer: 'X',
       status: 'playing',
-      winLine: null,
+      winInfo: null,
       moveCount: 0,
     });
     setTimer(0);
